@@ -16,7 +16,7 @@ const { jsonDB, } = require('./blacklist.mongo')
   const keys = await jsonDB.find({})
   const keypath = keys[0].key
    const auth = new JWT({
-     keyFile: keyPath,
+     keyFile: keypath,
      scopes: ['https://www.googleapis.com/auth/drive'],
    });
  
