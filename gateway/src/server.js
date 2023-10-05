@@ -190,7 +190,6 @@ function requestLimiter(ip,req,res) {
 //     } )
 // }
 
-
 async function verifyToken( req, res, next) {
 
     const { ip, } = req
@@ -204,14 +203,12 @@ async function verifyToken( req, res, next) {
         res.status(401).json({messsage: 'You are not authenticated'})
         return
     }
-    else if( activeProfiles[ip].count == 1 ){  
-         
-        await jwt.sign( payload, secretKey, { expiresIn: '1h'}, ( err, token ) => {
+    else if( activeProfiles[ip].count == 1 ){           
+        await jwt.sign( payload, secretKey, ( err, token ) => {
             if( err ) {
                 throw new Error(`Error While creating JWT: ${err.message}`) 
             }
-            activeProfiles[ip].token = token
-            
+            activeProfiles[ip].token = token        
         } )      
     } 
     else if( authorization ) {
@@ -223,15 +220,25 @@ async function verifyToken( req, res, next) {
             return       
         }
     
-        await jwt.verify( token, secretKey, (err,decoded) => {
+        await jwt.verify( token, secretKey, async (err,decoded) => {
             if(err) { 
                 throw new Error(`Invalid token: ${err.message}`)
+            }
+            if(activeProfiles[ip].count>3) {
+                await jwt.sign( payload, secretKey, ( err, token ) => {
+                    if( err ) {
+                        throw new Error(`Error While creating JWT: ${err.message}`) 
+                    }
+                    activeProfiles[ip].token = token        
+                } )  
             }
         } )
     }
 
     next()  
 }
+
+
 
 
 let currentRequestingServer = 0
@@ -255,7 +262,7 @@ app.post( '/', verifyToken, (req,res) => {
     const { ip, } = req
     const token = activeProfiles[ip].token
     loadBalancer()
-    
+     
     res.json({ response: 'good request', token, })
     return
 })
