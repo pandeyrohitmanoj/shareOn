@@ -87,6 +87,24 @@ app.use(async ( req, res, next) => {
 })       
 
 function requestLimiter(ip,req,res) {
+    
+    const forwardedFor = req.headers['x-forwarded-for'];
+    const realIP = req.headers['x-real-ip'];
+    const via = req.headers['via'];
+    const forwarded = req.headers['forwarded'];
+    // Request came through a proxy server
+
+    if (forwardedFor || realIP || via || forwarded) {
+        res.json({ok:false, message: "proxy server detected"})
+        return new Promise( async (res, rej) => {
+            try{                
+                localBlacklist.add(ip)
+                await updataBlacklistDb(ip)
+            }catch(err) {
+                throw new Error(`Error in requestLimiter: ${err.message}`)
+            }
+        }  )
+    }
     return new Promise(async () => {
         try{
             
@@ -107,11 +125,9 @@ function requestLimiter(ip,req,res) {
             if( difference < 1300 ) {
                 if( !localBlacklist.has(ip) ){
                     localBlacklist.add(ip)
-                    console.log(`happened`)  
                     await updataBlacklistDb(req.ip)
                 }
                 res.status(401).json({message:'you are not allowed'})
-                console.log('2')
                 return
             }
             activeProfiles[ip].lastRequest = now
@@ -293,7 +309,7 @@ function updataBlacklistDb(ip) {
             const result = await blacklistDb.updateOne( { ip,}, { $set: { date: new Date(), } }, { upsert: true } )
             res(result)
         }catch( err ) {
-            console.log(`error in updateBlaclistDb: ${err.message}`)
+            throw new Error(`error in updateBlaclistDb: ${err.message}`)
         }
     } )
 }
