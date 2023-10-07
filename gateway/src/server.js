@@ -6,6 +6,7 @@ const fs = require('fs')
 const path = require('path')
 const morgan = require('morgan')
 const jwt = require('jsonwebtoken')
+const { v4: uuidv4 } = require('uuid')
 
 
 let requestCounter = 0
@@ -13,7 +14,8 @@ const secretKey = '*!06hp9bZ15l!87xrta^'
 
 
 
-const { blacklistDb, serverlistDb, jsonDB, } = require('./models/blacklist.mongo')
+
+const { blacklistDb, serverlistDb, jsonDB, ipAccountsDB, profileDb, } = require('./models/blacklist.mongo')
 const { uploadFile,  } = require('./models/blaclist.model')
 
 
@@ -75,7 +77,8 @@ function handleLogs() {
 
 app.use(async ( req, res, next) => {
      const { ip, } = req
-    if( localBlacklist.has( req.ip ) ){
+     const { email, } = req.body
+    if( localBlacklist.has( email ) ){
         console.log('this is where problem occured') 
         res.status(503).json({message: 'you are not allowed'}) 
         console.log('first') 
@@ -87,7 +90,8 @@ app.use(async ( req, res, next) => {
 })       
 
 function requestLimiter(ip,req,res) {
-    
+
+    const { email, } = req.body
     const forwardedFor = req.headers['x-forwarded-for'];
     const realIP = req.headers['x-real-ip'];
     const via = req.headers['via'];
@@ -98,8 +102,8 @@ function requestLimiter(ip,req,res) {
         res.json({ok:false, message: "proxy server detected"})
         return new Promise( async (res, rej) => {
             try{                
-                localBlacklist.add(ip)
-                await updataBlacklistDb(ip)
+                localBlacklist.add(email)
+                await updataBlacklistDb(email)
             }catch(err) {
                 throw new Error(`Error in requestLimiter: ${err.message}`)
             }
@@ -108,30 +112,31 @@ function requestLimiter(ip,req,res) {
     return new Promise(async () => {
         try{
             
-            if( !activeProfiles[ip] ){     
+            if( !activeProfiles[email] ){     
                 const newUser = { 
                     count: 1,   
-                    lastRequest: Date.now(),
+                    lastRequest: Date.now(), 
+                    ip,
                     token: null,
                 }
-                activeProfiles[ip] = newUser
+                activeProfiles[email] = newUser
                 return
             }
             
             const now = Date.now()
             
-            const difference = now-activeProfiles[ip].lastRequest
-            console.log(`difference: ${difference}`)
-            if( difference < 1300 ) {
-                if( !localBlacklist.has(ip) ){
-                    localBlacklist.add(ip)
-                    await updataBlacklistDb(req.ip)
+            const difference = now-activeProfiles[email].lastRequest
+            
+            if( difference < 1100 ) {
+                if( !localBlacklist.has(email) ){
+                    localBlacklist.add(email)
+                    await updataBlacklistDb(email)
                 }
                 res.status(401).json({message:'you are not allowed'})
                 return
             }
-            activeProfiles[ip].lastRequest = now
-            activeProfiles[ip].count += 1
+            activeProfiles[email].lastRequest = now
+            activeProfiles[email].count += 1
     
         }catch(err) {
             throw new Error(`Error in requestLimiter(): ${err.message}`)
@@ -214,17 +219,17 @@ async function verifyToken( req, res, next) {
     const payload = { ip, email}
 
 
-    if( activeProfiles[ip].count > 1 && !authorization ) {
+    if( activeProfiles[email].count > 1 && !authorization ) {
         await updataBlacklistDb(ip)
         res.status(401).json({messsage: 'You are not authenticated'})
         return
     }
-    else if( activeProfiles[ip].count == 1 ){           
+    else if( activeProfiles[email].count == 1 ){           
         await jwt.sign( payload, secretKey, ( err, token ) => {
             if( err ) {
                 throw new Error(`Error While creating JWT: ${err.message}`) 
             }
-            activeProfiles[ip].token = token        
+            activeProfiles[email].token = token        
         } )      
     } 
     else if( authorization ) {
@@ -240,12 +245,13 @@ async function verifyToken( req, res, next) {
             if(err) { 
                 throw new Error(`Invalid token: ${err.message}`)
             }
-            if(activeProfiles[ip].count>3) {
+            if(activeProfiles[email].count>100) {
+                console.log('this hap')
                 await jwt.sign( payload, secretKey, ( err, token ) => {
                     if( err ) {
                         throw new Error(`Error While creating JWT: ${err.message}`) 
                     }
-                    activeProfiles[ip].token = token        
+                    activeProfiles[email].token = token        
                 } )  
             }
         } )
@@ -270,15 +276,31 @@ function loadBalancer() {
 
 
 
+app.post( '/createUser', async ( req, res ) => {
+    const { ip, body } = req
+    const { email, } = body
 
+    const emails = ipAccountsDB.findOne( { ip, }, { email:1, _id:0 } )
+    if( emails.length>10 ) {
+        res.status(429).json( { ok: false, message: 'You have reached out maximum accounts for your ip' } )
+        requestCounter
+    }
+    if( emails.indexOf(email) != -1 ){
+        res.status(403).json( { ok: false, message: "Account exists"} )
+    }
+    const salt = uuidv4()
+    await profileDb.updateOne( { email, }, { salt, } )
+    res.status(200).json( { ok: true, message: 'your account is created' })
+})
 
 
 
 app.post( '/', verifyToken, (req,res) => {
-    const { ip, } = req
-    const token = activeProfiles[ip].token
-    loadBalancer()
-     
+    const {email, } = req.body
+    const token = activeProfiles[email].token
+    
+    loadBalancer(activeProfiles[email])
+      
     res.json({ response: 'good request', token, })
     return
 })
@@ -286,7 +308,7 @@ app.post( '/', verifyToken, (req,res) => {
 
 
 
-
+ 
 
 
 
